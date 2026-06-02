@@ -77,10 +77,7 @@ condition-net/
 │   ├── run_imperfectpour.py         # ImperfectPour 一键训练脚本
 │   ├── preprocess_imperfectpour.py  # 数据预处理（视频→帧+音频+CSV）
 │   ├── setup_autodl.sh              # AutoDL 环境配置脚本
-│   └── requirements.txt             # Python 依赖
-├── main.py                          # 早期原型脚本
-├── condition-net.pdf                # 论文/文档
-└── ImperfectPour/                   # 数据集（需自行解压）
+
 ```
 
 ---
