@@ -77,8 +77,180 @@ condition-net/
 │   ├── run_imperfectpour.py         # ImperfectPour 一键训练脚本
 │   ├── preprocess_imperfectpour.py  # 数据预处理（视频→帧+音频+CSV）
 │   ├── setup_autodl.sh              # AutoDL 环境配置脚本
+│   └── requirements.txt             # Python 依赖
+├── main.py                          # 早期原型脚本
+├── condition-net.pdf                # 论文/文档
+└── ImperfectPour/                   # 数据集（需自行解压）
+```
+
+---
+
+## 📦 ImperfectPour 数据集
+
+ConditionNET 使用 **ImperfectPour** 数据集进行训练和评估。这是一个 **Franka Emika Panda 机器人执行酒吧调酒任务** 的 VR 遥操作演示数据集，专注于收集失败演示以支持异常检测和执行监控研究。
+
+### 🎯 任务概述
+
+机器人需要完成倒饮料的完整流程，在发生泼洒时需要清理桌面。每个演示录制包含 **双视角视频** + **帧级本体感知数据** + **动作标注**。
+
+### 📊 数据规模总览
+
+| 指标 | 数值 |
+|------|------|
+| 唯一录制片段 | 118 个 |
+| 相机视角 | 2 个（cam2 + cam3），共 236 个标注 |
+| 动作总条数 | 1,096 条 |
+| 帧级 NPZ 数据 | 296,319 个 |
+| 视频文件 | 282 个 MP4（含 46 个无标注的额外视频） |
+
+### ✅ 成功与失败演示
+
+| 类型 | 数量 | 占比 |
+|------|------|------|
+| **成功演示** 🟢 | 78 | 33.1% |
+| **失败演示** 🔴 | 158 | 66.9% |
+
+> 💡 这是一个**以失败为主**的数据集（失败率 ~67%），非常契合 ConditionNET 的条件关系推理任务 —— 模型需要判断一个动作在给定场景下是否"满足条件"。
+
+**失败原因分布**（一个演示可同时包含多种失败）：
+
+| 失败标签 | 说明 | 出现次数 |
+|----------|------|----------|
+| `has_spill` | 液体泼洒 | 356 次 |
+| `missing_object` | 物体缺失（如没有瓶子可拿） | 176 次 |
+| `has_fallen` | 物体掉落 | 8 次 |
+
+### 🏷️ 6 种动作类型
+
+机器人按以下流水线执行任务，每个动作有明确的前置条件（precondition）和效果（effect）帧范围：
+
+| 序号 | 动作 | 英文标识 | 数量 | 占比 |
+|------|------|------|------|------|
+| 1 | 拿起瓶子 | `pick up bottle` | 252 | 23.0% |
+| 2 | 倒果汁入杯 | `pour juice into cup` | 226 | 20.6% |
+| 3 | 放置瓶子 | `place bottle on table` | 244 | 22.3% |
+| 4 | 拿起抹布 | `pick up cloth` | 148 | 13.5% |
+| 5 | 擦拭桌子 | `wipe table` | 94 | 8.6% |
+| 6 | 放置抹布 | `place cloth on table` | 132 | 12.0% |
+
+**完整任务流程**：拿瓶子 → 倒果汁 → 放瓶子 → 拿抹布 → 擦桌子 → 放抹布
+
+每个标注文件包含 2-14 个动作，其中 3 或 6 个动作最为常见（对应完整调酒流程）。
+
+### 📁 数据目录结构
+
+每个录制目录包含一个视频文件和逐帧本体感知数据：
 
 ```
+ImperfectPour/
+├── annotations/                         # 动作标注 (236 个 JSON)
+│   ├── recording_2023-11-21-16-41-33_cam2.json
+│   ├── recording_2023-11-21-16-41-33_cam3.json
+│   └── ...
+├── videos/                              # 视频 + 本体感知数据 (282 个目录)
+│   └── recording_2023-11-21-16-41-33_cam2/
+│       ├── recording_..._cam2.mp4       # 视频文件 (30 FPS)
+│       ├── 00000.npz                    # 第 0 帧本体感知数据
+│       ├── 00001.npz                    # 第 1 帧
+│       └── ...                          # 约 800-2000 帧
+├── train_split.txt                      # 训练集划分 (94 录制 / 188 标注)
+├── val_split.txt                        # 验证集划分 (24 录制 / 48 标注)
+├── extract_frames.py                    # 视频帧提取脚本
+├── create_vids.py                       # 帧→视频还原脚本
+└── README.md                            # 数据集原始说明
+```
+
+### 🤖 本体感知数据（.npz 文件）
+
+每帧 `.npz` 文件包含 **56 个字段**，覆盖机器人的完整运动学和力学信息：
+
+| 类别 | 字段 | 说明 |
+|------|------|------|
+| **夹爪** | `finger_0_pos`, `finger_1_pos`, `finger_0_vel`, `finger_1_vel` | 夹爪位置与速度 |
+| **关节位置 (7轴)** | `pos_joint1` ~ `pos_joint7` | 各关节角度位置 |
+| **关节速度 (7轴)** | `vel_joint1` ~ `vel_joint7` | 各关节角速度 |
+| **关节力矩 (7轴)** | `eff_joint1` ~ `eff_joint7` | 各关节施加力矩 |
+| **末端位姿** | `pose_x/y/z`, `pose_qx/qy/qz/qw` | 末端执行器位置（3D）+ 四元数旋转 |
+| **末端速度** | `vel_x/y/z`, `vel_qx/qy/qz` | 末端线速度 + 角速度 |
+| **估计力/力矩** | `est_force_x/y/z`, `est_torque_x/y/z` | AIDIN AFT200 传感器估计值 |
+| **测量力/力矩** | `measured_force_x/y/z`, `measured_torque_x/y/z` | 传感器直接测量值 |
+| **法兰力/力矩** | `flanch_force_x/y/z`, `flanch_torque_x/y/z` | 法兰坐标系下的力/力矩 |
+
+读取示例：
+```python
+>>> import numpy as np
+>>> data = np.load("00951.npz", allow_pickle=True)["arr_0"][()]
+>>> data.keys()
+dict_keys(['finger_0_pos', 'finger_1_pos', 'finger_0_vel', 'finger_1_vel',
+           'est_force_x', 'est_force_y', 'est_force_z', ...])
+```
+
+### 📝 标注格式详解
+
+每个 JSON 文件对应一个录制的全部动作标注：
+
+```json
+[
+    {
+        "action": "pour juice into cup",
+        "pre_start_fid": 320,
+        "pre_end_fid": 370,
+        "post_start_fid": 642,
+        "post_end_fid": 723,
+        "has_spill": false,
+        "missing_object": false,
+        "do_augmentation": true,
+        "has_fallen": false
+    }
+]
+```
+
+**字段说明**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `action` | string | 动作描述文本（用于 ConditionNET 的文本编码） |
+| `pre_start_fid` / `pre_end_fid` | int | 前置条件帧范围（动作执行前的状态） |
+| `post_start_fid` / `post_end_fid` | int | 效果帧范围（动作执行后的结果） |
+| `has_spill` | bool | 是否发生液体泼洒 |
+| `missing_object` | bool | 是否有物体缺失 |
+| `has_fallen` | bool | 是否有物体掉落（部分文件有此字段） |
+| `do_augmentation` | bool | 该动作是否参与数据增强（True 占 70.1%，False 占 29.9%） |
+
+> ⚠️ 当 `missing_object=true` 时，帧范围通常设为 `[0, 全视频长度]` 作为占位符，表示该物体未出现在场景中。这类样本的 `do_augmentation` 一律为 `false`。
+
+### 🔄 与 ConditionNET 的数据流
+
+`preprocess_imperfectpour.py` 脚本将原始数据集转换为模型可用的格式：
+
+```
+原始数据                          ConditionNET 输入
+─────────────────────────────────────────────────
+pre_end_fid 帧     ──→   I⁻ (前置条件图像)
+post_start_fid 帧  ──→   I⁺ (效果图像)
+对应帧音频片段     ──→   音频 token (可选)
+action 字段文本    ──→   动作指令文本
+
+三类标签对应：
+  I⁻ + 动作文本   →  Precondition (0)
+  I⁺ + 动作文本   →  Effect (1)
+  跨 demo 随机配对  →  Unsatisfied (2)
+```
+
+### 📅 数据采集信息
+
+- **采集时间**：2023年11月 ~ 2024年1月，分布在多个日期
+- **硬件**：AIDIN AFT200 系列力/力矩传感器
+- **力传感器品牌**：AIDIN AFT200 Series
+
+### 🗂️ 训练/验证划分
+
+| 划分 | 录制数 | 标注文件 | 对应文件 |
+|------|--------|----------|----------|
+| **训练集** | 94 | 188（94 × 2 视角） | `train_split.txt` |
+| **验证集** | 24 | 48（24 × 2 视角） | `val_split.txt` |
+
+两个视角（cam2、cam3）的标注内容**完全一致**（帧编号、动作、标签均相同），各自对应不同视角的视频数据。
 
 ---
 
